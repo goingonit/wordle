@@ -1,0 +1,21 @@
+{
+  "name": "wordle",
+  "version": "1.0.0",
+  "description": "Analyze Wordle strategies",
+  "main": "wordle.ts",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goingonit/wordle.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/goingonit/wordle/issues"
+  },
+  "homepage": "https://github.com/goingonit/wordle#readme",
+  "dependencies": {
+    "@types/node": "^17.0.5",
+    "ts-node": "^10.4.0"
+  }
+}
