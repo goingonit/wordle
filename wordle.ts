@@ -58,24 +58,42 @@ const loadDict = async (dictFile: string) => {
         }
     }
 }
-
 /** Test a single guess against a single possible word, and see what result you get. */
 const testGuess = (guess: string, word: string): GuessResult => {
-    // remainingLetters records how many letters in the possible word haven't yet been recorded
-    // as an exact or partial match against the guess. This is stored as an array of up to length 26,
-    // where a = 0, b = 1, etc.
-    let remainingLetters: number[] = [];
+    // We count occurrences of each letter in each word by storing two bits per letter
+    // (this relies on never seeing the same letter >3x in one word!)
+    // Each letter gets its own bit position (a=0, b=1, etc). Since there are 26 letters and 
+    // JS does 32-bit bitwise arithmetic, we can fit one bit per letter in a single JS number.
+    // "lo" stores the low bit of the count of a given letter while "hi" stores the high bit.
+    // We increment the counter for the word at the start, and as we find those letters in the guess, 
+    // we decrement the count until we hit zero.
+    let remainingLettersLo = 0;
+    let remainingLettersHi = 0;
     let result: GuessResult = '';
     for (let i = 0; i < WORD_LENGTH; i++) {
-        remainingLetters[word.charCodeAt(i) - 97] = remainingLetters[word.charCodeAt(i) - 97] || 0 + 1;
+        const charVal = 1 << (word.charCodeAt(i) - 97);
+        if (remainingLettersHi & remainingLettersLo & charVal) {
+            throw new Error(`Letter repeated 4x: ${word}`);
+        }
+
+        // Add charVal to remainingLetters using boolean operations.
+        remainingLettersHi ^= (remainingLettersLo & charVal);
+        remainingLettersLo ^= charVal;
     } 
     for (let i = 0; i < WORD_LENGTH; i++) {
+        const charVal = 1 << (guess.charCodeAt(i) - 97);
         if (guess[i] === word[i]) {
             result += RESULT_EXACT;
-            remainingLetters[guess.charCodeAt(i) - 97]--;
-        } else if (remainingLetters[guess.charCodeAt(i) - 97]) {
+
+            // Remove charVal from remainingLetters using boolean operations.
+            remainingLettersHi ^= (~remainingLettersLo & charVal);
+            remainingLettersLo ^= charVal;
+        } else if ((remainingLettersHi | remainingLettersLo) & charVal) {
             result += RESULT_SOMEWHERE;
-            remainingLetters[guess.charCodeAt(i) - 97]--;
+
+            // Remove charVal from remainingLetters using boolean operations.
+            remainingLettersHi ^= (~remainingLettersLo & charVal);
+            remainingLettersLo ^= charVal;
         } else {
             result += RESULT_MISS;
         }
