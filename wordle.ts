@@ -24,24 +24,21 @@ import * as fs from 'fs/promises';
 const dict: string[] = [];
 
 /** 
- * A guess result is a number representing a unique Wordle result for a specific guess.
- * 
- * A guess is represented as a 5-character string, with exact (green) matches represented
- * as 'G', yellow as 'Y', and grey as ' '.
+ * A guess result is a 5-digit hex number representing a unique Wordle result for a specific guess.
  */
-type GuessResult = string;
+type GuessResult = number;
 
 const WORD_LENGTH = 5;
 
-const RESULT_EXACT: GuessResult = 'G'
-const RESULT_SOMEWHERE: GuessResult = 'Y';
-const RESULT_MISS: GuessResult = ' ';
+const RESULT_EXACT: GuessResult = 0x2;
+const RESULT_SOMEWHERE: GuessResult = 0x1;
+const RESULT_MISS: GuessResult = 0x0;
 
 /** The GuessResult corresponding to 5 greens in a row. */
-const RESULT_WIN: GuessResult = 'GGGGG';
+const RESULT_WIN: GuessResult = 0x22222;
 
 /** A map from GuessResult to all the words that would return that result for a given guess. */
-type ResultMap = {[result: GuessResult]: string[]};
+type ResultMap = Map<GuessResult, string[]>;
 
 /** The state of the game right before a new guess. */
 interface GameState {
@@ -58,6 +55,7 @@ const loadDict = async (dictFile: string) => {
         }
     }
 }
+
 /** Test a single guess against a single possible word, and see what result you get. */
 const testGuess = (guess: string, word: string): GuessResult => {
     // We count occurrences of each letter in each word by storing two bits per letter
@@ -69,7 +67,6 @@ const testGuess = (guess: string, word: string): GuessResult => {
     // we decrement the count until we hit zero.
     let remainingLettersLo = 0;
     let remainingLettersHi = 0;
-    let result: GuessResult = '';
     for (let i = 0; i < WORD_LENGTH; i++) {
         const charVal = 1 << (word.charCodeAt(i) - 97);
         if (remainingLettersHi & remainingLettersLo & charVal) {
@@ -79,37 +76,46 @@ const testGuess = (guess: string, word: string): GuessResult => {
         // Add charVal to remainingLetters using boolean operations.
         remainingLettersHi ^= (remainingLettersLo & charVal);
         remainingLettersLo ^= charVal;
-    } 
+    }
+    let result: GuessResult = 0x0;  
+
+    // First look for exact matches.
     for (let i = 0; i < WORD_LENGTH; i++) {
         const charVal = 1 << (guess.charCodeAt(i) - 97);
         if (guess[i] === word[i]) {
-            result += RESULT_EXACT;
+            result |= RESULT_EXACT << (i * 4);
 
             // Remove charVal from remainingLetters using boolean operations.
             remainingLettersHi ^= (~remainingLettersLo & charVal);
             remainingLettersLo ^= charVal;
-        } else if ((remainingLettersHi | remainingLettersLo) & charVal) {
-            result += RESULT_SOMEWHERE;
-
-            // Remove charVal from remainingLetters using boolean operations.
-            remainingLettersHi ^= (~remainingLettersLo & charVal);
-            remainingLettersLo ^= charVal;
-        } else {
-            result += RESULT_MISS;
         }
+    }
+
+    // Now look for non-exact matches.
+    for (let i = 0; i < WORD_LENGTH; i++) {
+        const charVal = 1 << (guess.charCodeAt(i) - 97);
+        if (!(result & (RESULT_EXACT << (i * 4))) && ((remainingLettersHi | remainingLettersLo) & charVal)) {
+            result |= RESULT_SOMEWHERE << (i*4);
+
+            // Remove charVal from remainingLetters using boolean operations.
+            remainingLettersHi ^= (~remainingLettersLo & charVal);
+            remainingLettersLo ^= charVal;
+        } 
     }
     return result;
 }
 
 /** Test all possible remaining words against a given guess. */
 const testAllGuess = (state: GameState, guess: string): ResultMap => {
-    const out: ResultMap = {};
+    const out: ResultMap = new Map<GuessResult, string[]>();
     for (const word of state.remainingWords) {
         const wordResult = testGuess(guess, word);
-        if (!out[wordResult]) {
-            out[wordResult] = [];
+        let v = out.get(wordResult);
+        if (!v) {
+            v = [];
+            out.set(wordResult, v);
         }
-        out[wordResult].push(word);
+        v.push(word);
     }
     return out;
 }
@@ -117,22 +123,24 @@ const testAllGuess = (state: GameState, guess: string): ResultMap => {
 /** Find the largest "bucket" in the result map. */
 const findMax = (results: ResultMap): number => {
     let out = 0;
-    for (const k in results) {
-        if (results[k].length > out) {
-            out = results[k].length;
+    results.forEach(v => {
+        if (v.length > out) {
+            out = v.length;
         }
-    }
+    });
     return out;
 }
 
 /** Find the best guess given the current game state. */
 const findBestGuess = (state: GameState): {guess: string, results: ResultMap} => {
+    let bestGuessResults: ResultMap = new Map();
     if (state.remainingWords.length === 1) {
-        return {guess: state.remainingWords[0], results: {[RESULT_WIN]: [state.remainingWords[0]]}};
+        bestGuessResults.set(RESULT_WIN, [state.remainingWords[0]]);
+        return {guess: state.remainingWords[0], results: bestGuessResults};
     }
 
     let bestGuess: string = '';
-    let bestGuessResults: ResultMap = {0: state.remainingWords};
+    bestGuessResults.set(0, state.remainingWords);
     let bestGuessMax: number = state.remainingWords.length;
     for (const word of dict) {
         if (state.guessesSoFar.includes(word)) {
@@ -140,7 +148,7 @@ const findBestGuess = (state: GameState): {guess: string, results: ResultMap} =>
         }
         const resultMap = testAllGuess(state, word);
         const resultMax = findMax(resultMap);
-        if ((resultMax < bestGuessMax) || (resultMax === bestGuessMax && resultMap[RESULT_WIN] && !bestGuessResults[RESULT_WIN])) {
+        if ((resultMax < bestGuessMax) || (resultMax === bestGuessMax && resultMap.get(RESULT_WIN) && !bestGuessResults.get(RESULT_WIN))) {
             bestGuess = word;
             bestGuessResults = resultMap;
             bestGuessMax = resultMax;
@@ -159,7 +167,7 @@ const findBestGuess = (state: GameState): {guess: string, results: ResultMap} =>
 const playToMaxDepth = (state: GameState): string[] => {
     let maxDepthChain: string[] = state.guessesSoFar;
     const {guess, results} = findBestGuess(state);
-    for (const result in results) {
+    results.forEach((v, result) => {
         let chain: string[];
         if (result === RESULT_WIN) {
             // If we got a win, we've made it to the end of the chain!
@@ -167,14 +175,14 @@ const playToMaxDepth = (state: GameState): string[] => {
         } else {
             // Otherwise, recurse and make another guess.
             chain = playToMaxDepth({
-                remainingWords: results[result],
+                remainingWords: v,
                 guessesSoFar: state.guessesSoFar.concat([guess]),
             });
         }
         if (chain.length > maxDepthChain.length) {
             maxDepthChain = chain;
         }
-    }
+    });
     return maxDepthChain;
 }
 
